@@ -12,6 +12,7 @@ from av.packet import Packet
 from ..jitterbuffer import JitterFrame
 from ..mediastreams import VIDEO_TIME_BASE, convert_timebase
 from .base import Decoder, Encoder
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -132,12 +133,12 @@ def create_encoder_context(
     codec.framerate = fractions.Fraction(MAX_FRAME_RATE, 1)
     codec.time_base = fractions.Fraction(1, MAX_FRAME_RATE)
     codec.options = {
-        "profile": "baseline",
+        "profile:v": "baseline",
         "level": "31",
-        "tune": "zerolatency",  # does nothing using h264_omx
+        #"tune": "zerolatency",  # does nothing using h264_omx
     }
     codec.open()
-    return codec, codec_name == "h264_omx"
+    return codec, codec_name == "h264_v4l2m2m"
 
 
 class H264Encoder(Encoder):
@@ -146,6 +147,7 @@ class H264Encoder(Encoder):
         self.buffer_pts: Optional[int] = None
         self.codec: Optional[av.CodecContext] = None
         self.codec_buffering = False
+        self.encode_already_called = False
         self.__target_bitrate = DEFAULT_BITRATE
 
     @staticmethod
@@ -268,16 +270,18 @@ class H264Encoder(Encoder):
     def _encode_frame(
         self, frame: av.VideoFrame, force_keyframe: bool
     ) -> Iterator[bytes]:
-        if self.codec and (
-            frame.width != self.codec.width
-            or frame.height != self.codec.height
-            # we only adjust bitrate if it changes by over 10%
-            or abs(self.target_bitrate - self.codec.bit_rate) / self.codec.bit_rate
-            > 0.1
-        ):
-            self.buffer_data = b""
-            self.buffer_pts = None
-            self.codec = None
+        #if self.codec and (
+        #    frame.width != self.codec.width
+        #    or frame.height != self.codec.height
+        #    # we only adjust bitrate if it changes by over 10%
+        #    or abs(self.target_bitrate - self.codec.bit_rate) / self.codec.bit_rate
+        #    > 0.1
+        #    
+        #
+        #):
+        #    self.buffer_data = b""
+        #    self.buffer_pts = None
+        #    self.codec = None
 
         if force_keyframe:
             # force a complete image
@@ -286,18 +290,29 @@ class H264Encoder(Encoder):
             # reset the picture type, otherwise no B-frames are produced
             frame.pict_type = av.video.frame.PictureType.NONE
 
-        if self.codec is None:
+        if self.codec is None and not self.encode_already_called:
+
+
+            
+            print("HEREHERHEHER 1")
             try:
+                print("HEREHERHEHER 2")
                 self.codec, self.codec_buffering = create_encoder_context(
-                    "h264_omx", frame.width, frame.height, bitrate=self.target_bitrate
+                    "h264_v4l2m2m", frame.width, frame.height, bitrate=self.target_bitrate
                 )
             except Exception:
+                print("HEREHERHEHER 3")
+                traceback.print_exc()  # Prints the traceback of the exception
                 self.codec, self.codec_buffering = create_encoder_context(
                     "libx264",
                     frame.width,
                     frame.height,
                     bitrate=self.target_bitrate,
                 )
+
+            
+            self.encode_already_called = False
+
 
         data_to_send = b""
         for package in self.codec.encode(frame):
